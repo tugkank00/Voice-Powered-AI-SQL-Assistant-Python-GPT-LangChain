@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI SQL Assistant</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css"
+      rel="stylesheet"
+    />
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/css/styles.css" />
+  </head>
+  <body>
+    <div class="app-container">
+      <div class="app-header">
+        <div class="app-header-content">
+          <h1 class="text-center mb-3">
+            <i class="bi bi-database-fill me-2"></i>AI SQL Assistant
+          </h1>
+          <p class="lead text-center">
+            Ask a question in natural language, and AI will generate and execute
+            a SQL query
+          </p>
+          <p class="lead text-center">
+            Results are fetched directly from a real ai_services table in
+            PostgreSQL
+          </p>
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <button
+          onclick="startRecording()"
+          class="btn btn-primary"
+          id="startRecordingBtn"
+        >
+          <i class="bi bi-mic-fill me-2"></i>Voice Recorder
+        </button>
+        <button
+          onclick="stopRecording()"
+          class="btn btn-danger"
+          id="stopRecordingBtn"
+          style="display: none"
+        >
+          <i class="bi bi-stop-fill me-2"></i>Stop Recording
+        </button>
+      </div>
+
+      <div class="form-card">
+        <form action="/ask" method="post" id="queryForm">
+          <div class="mb-3 query-input-container">
+            <label for="question" class="form-label"
+              ><i class="bi bi-chat-left-text me-1"></i>Your question:</label
+            >
+            <input
+              type="text"
+              required
+              pattern=".*\S+.*"
+              title="The field should not be empty or contain only gaps"
+              class="form-control query-input"
+              id="question"
+              name="question"
+              value="{{ question|default('') }}"
+              placeholder="Example: Which AI models are available"
+            />
+            <button type="submit" class="submit-btn">
+              <i class="bi bi-send-fill"></i>
+            </button>
+          </div>
+          <div class="database-schema-toggle" id="schemaToggle">
+            <i class="bi bi-table"></i> Show the structure of the database
+          </div>
+          <div class="schema-container" id="schemaContainer">
+            <div class="schema-table">
+              <div class="schema-table-name">
+                <i class="bi bi-robot"></i> ai_services
+              </div>
+              <div class="schema-columns">
+                id , name, provider, model, type, input_price_per_1k_tokens,
+                output_price_per_1k_tokens, supports_sql , max_tokens,
+                context_window, available, launched_at, description
+              </div>
+            </div>
+
+            <div class="schema-table">
+              <div class="schema-table-name">
+                <i class="bi bi-building"></i> ai_projects
+              </div>
+              <div class="schema-columns">
+                id, client_name, industry, country
+              </div>
+            </div>
+
+            <div class="schema-table">
+              <div class="schema-table-name">
+                <i class="bi bi-graph-up"></i> ai_service_usage
+              </div>
+              <div class="schema-columns">
+                id, service_id, client_id, user_name, usage_date, prompt_tokens,
+                completion_tokens
+              </div>
+            </div>
+          </div>
+          <div class="mt-3">
+            <h6 class="mb-2">Example questions:</h6>
+            <div class="examples-container">
+              <div class="example-chip">Show all OpenAI models</div>
+              <div class="example-chip">List all models that support SQL</div>
+              <div class="example-chip">3 cheapest models by output PRICE</div>
+              <div class="example-chip">Clients from USA</div>
+              <div class="example-chip">Group models by provider</div>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <div class="loading" id="loadingIndicator">
+        <div class="spinner"></div>
+        <p class="mt-3">SQL generation and request ...</p>
+      </div>
+
+      {% if error and error != 'None' %}
+      <div class="error-message" id="errorContainer" style="display: block">
+        {{ error }}
+      </div>
+      {% endif %}
+
+      <div
+        class="results-card"
+        id="resultsContainer"
+        {%
+        if
+        sql
+        or
+        headers
+        or
+        rows
+        %}style="display: block"
+        {%
+        endif
+        %}
+      >
+        <div
+          class="sql-section"
+          id="sqlSection"
+          {%
+          if
+          not
+          sql
+          %}style="display: none;"
+          {%
+          endif
+          %}
+        >
+          <div class="sql-header">
+            <h4>
+              <i class="bi bi-code-slash text-primary me-1"></i>Generated SQL:
+            </h4>
+            <span class="badge bg-primary">SQL</span>
+          </div>
+          <div class="sql-code">
+            <button class="copy-btn" onclick="copySQL()">
+              <i class="bi bi-clipboard"></i> Copy
+            </button>
+            <pre><code class="language-sql" id="sqlCode">{{ sql|default('No SQL generated yet') }}</code></pre>
+          </div>
+        </div>
+
+        <div
+          class="result-section"
+          {%
+          if
+          not
+          headers
+          %}style="display: none;"
+          {%
+          endif
+          %}
+        >
+          <h4 class="mb-3">
+            <i class="bi bi-table text-primary me-1"></i>Query Results:
+          </h4>
+          {% if rows %}
+          <div class="table-container">
+            <table class="table result-table" id="resultsTable">
+              <thead>
+                <tr>
+                  {% for header in headers %}
+                  <th data-header="{{ header }}">{{ header }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in rows %}
+                <tr>
+                  {% if row is mapping %}{% for header in headers %}
+                  <td data-header="{{ header }}">{{ row[header] }}</td>
+                  {% endfor %}{% else %}{% for cell in row %}
+                  <td data-index="{{ loop.index0 }}">{{ cell }}</td>
+                  {% endfor %}{% endif %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <form
+            id="downloadReportForm"
+            action="/download-report-pdf"
+            method="post"
+            class="mt-3"
+          >
+            <input type="hidden" id="rowsJsonInput" name="rows_json" value="" />
+            <input
+              type="hidden"
+              id="headersJsonInput"
+              name="headers_json"
+              value=""
+            />
+            <input
+              type="hidden"
+              name="question"
+              value="{{ question|default('') }}"
+            />
+            <input type="hidden" name="sql" value="{{ sql|default('') }}" />
+            <button type="submit" class="btn btn-success" id="downloadPdfBtn">
+              <i class="bi bi-file-earmark-pdf me-1"></i> Download Report (PDF)
+            </button>
+          </form>
+          {% endif %}
+        </div>
+
+        <div class="result-info">
+          <i class="bi bi-info-circle"></i>
+          <span>{{ rows|length|default('0') }} records found</span>
+          {% if execution_time %}<span class="ms-2"
+            >Executed in {{ execution_time }} ms.</span
+          >{% endif %}
+        </div>
+      </div>
+    </div>
+
+    <button class="history-toggle" id="historyToggle">
+      <i class="bi bi-clock-history"></i>
+    </button>
+    <div class="history-container" id="historyContainer">
+      <h5>History</h5>
+      <div class="history-list"></div>
+    </div>
+    <button class="theme-toggle" id="themeToggle">
+      <i class="bi bi-moon"></i>
+    </button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/sql.min.js"></script>
+    <script src="/static/js/scripts.js"></script>
+
+    <script>
+      function setupPdfDownload() {
+        const downloadForm = document.getElementById("downloadReportForm");
+        const downloadBtn = document.getElementById("downloadPdfBtn");
+
+        if (!downloadForm || !downloadBtn) return;
+
+        downloadForm.addEventListener("submit", function (e) {
+          e.preventDefault();
+
+          try {
+            const table = document.getElementById("resultsTable");
+            if (!table) {
+              console.error("Table not found");
+              return;
+            }
+
+            const headers = Array.from(table.querySelectorAll("thead th")).map(
+              (th) => th.textContent.trim()
+            );
+
+            const rows = Array.from(table.querySelectorAll("tbody tr")).map(
+              (tr) => {
+                const cells = Array.from(tr.querySelectorAll("td"));
+                const obj = {};
+                headers.forEach((header, i) => {
+                  obj[header] = cells[i] ? cells[i].textContent.trim() : "";
+                });
+                return obj;
+              }
+            );
+
+            console.log("Headers:", headers);
+            console.log("Rows:", rows);
+
+            if (headers.length === 0 || rows.length === 0) {
+              alert("NO data for export");
+              return;
+            }
+
+            document.getElementById("rowsJsonInput").value =
+              JSON.stringify(rows);
+            document.getElementById("headersJsonInput").value =
+              JSON.stringify(headers);
+
+            downloadBtn.innerHTML =
+              '<i class="bi bi-hourglass-split me-1"></i> Generatin PDF...';
+            downloadBtn.disabled = true;
+
+            const formData = new FormData(downloadForm);
+
+            fetch("/download-report-pdf", {
+              method: "POST",
+              body: formData,
+            })
+              .then((response) => {
+                if (!response.ok) {
+                  throw new Error(
+                    `HTTP ${response.status}: ${response.statusText}`
+                  );
+                }
+                return response.blob();
+              })
+              .then((blob) => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.style.display = "none";
+                a.href = url;
+                a.download = `report_${new Date()
+                  .toISOString()
+                  .slice(0, 19)
+                  .replace(/:/g, "-")}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+              })
+              .catch((error) => {
+                console.error("PDF generation error:", error);
+                alert("PDF generation error: " + error.message);
+              })
+              .finally(() => {
+                downloadBtn.innerHTML =
+                  '<i class="bi bi-file-earmark-pdf me-1"></i> Download Report (PDF)';
+                downloadBtn.disabled = false;
+              });
+          } catch (error) {
+            console.error("Error in preparing data:", error);
+            alert("Error in preparing data: " + error.message);
+            downloadBtn.innerHTML =
+              '<i class="bi bi-file-earmark-pdf me-1"></i> Download Report (PDF)';
+            downloadBtn.disabled = false;
+          }
+        });
+      }
+
+      document.addEventListener("DOMContentLoaded", function () {
+        setupPdfDownload();
+      });
+
+      function reinitializePdfDownload() {
+        setupPdfDownload();
+      }
+    </script>
+  </body>
+</html>
